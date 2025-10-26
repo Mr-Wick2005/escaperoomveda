@@ -8,6 +8,7 @@ import {
   detectInterests,
   generateDynamicQuestions,
   evaluateInterviewAnswers,
+  generateInterviewAnalysis,
 } from "../../mock/gameData";
 import {
   User,
@@ -16,20 +17,25 @@ import {
   XCircle,
   Mic,
   MicOff,
+  Loader2,
 } from "lucide-react";
-import useCountdownTimer from '../../hooks/useCountdownTimer';
+import useCountdownTimer from "../../hooks/useCountdownTimer";
 
 const InterviewPanel = ({ onComplete }) => {
   const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [answers, setAnswers] = useState([ ""]); // Start with one answer for first question
+  const [answers, setAnswers] = useState([""]); // Start with one answer for first question
   const [isListening, setIsListening] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [results, setResults] = useState(null);
   const [interviewStarted, setInterviewStarted] = useState(false);
   const [recognition, setRecognition] = useState(null);
-  const [dynamicQuestions, setDynamicQuestions] = useState([firstInterviewQuestion]); // Start with first question
+  const [dynamicQuestions, setDynamicQuestions] = useState([
+    firstInterviewQuestion,
+  ]); // Start with first question
   const [questionsGenerated, setQuestionsGenerated] = useState(false);
   const [interimText, setInterimText] = useState("");
+  const [conversationHistory, setConversationHistory] = useState([]); // Track Q&A history for AI
+  const [isGeneratingQuestion, setIsGeneratingQuestion] = useState(false); // Loading state for AI generation
   const speechAccumulatedRef = useRef("");
 
   // Use the countdown timer hook for round 3 (20 minutes)
@@ -39,8 +45,8 @@ const InterviewPanel = ({ onComplete }) => {
     startTimer,
     stopTimer,
     resetTimer,
-    isRunning: timerRunning
-  } = useCountdownTimer(1200, 'interview-timer', () => {
+    isRunning: timerRunning,
+  } = useCountdownTimer(1200, "interview-timer", () => {
     // Auto-submit when time runs out
     if (!showResults) {
       handleSubmitInterview();
@@ -153,7 +159,46 @@ const InterviewPanel = ({ onComplete }) => {
     setAnswers(newAnswers);
   };
 
-  const handleNextQuestion = () => {
+  const generateNextQuestion = async (questionNumber, interests = null) => {
+    try {
+      setIsGeneratingQuestion(true);
+
+      const response = await fetch("/api/generate-interview-question", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          conversation_history: conversationHistory,
+          question_number: questionNumber,
+          interests: interests,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      return {
+        id: data.id,
+        question: data.question,
+        type: data.question_type,
+      };
+    } catch (error) {
+      console.error("Error generating question:", error);
+      // Fallback to static questions
+      const fallbackInterests = interests || detectInterests([answers[0]]);
+      const staticQuestions = generateDynamicQuestions(fallbackInterests);
+      const fallbackIndex = (questionNumber - 2) % staticQuestions.length;
+      return staticQuestions[fallbackIndex] || staticQuestions[0];
+    } finally {
+      setIsGeneratingQuestion(false);
+    }
+  };
+
+  const handleNextQuestion = async () => {
     // Stop speech recognition when moving to next question
     if (isListening && recognition) {
       recognition.stop();
@@ -163,10 +208,34 @@ const InterviewPanel = ({ onComplete }) => {
     speechAccumulatedRef.current = "";
 
     // If this is the first question and we haven't generated dynamic questions yet
-    if (currentQuestion === 0 && !questionsGenerated && answers[0] && answers[0].length > 0) {
-      // Generate dynamic questions based on the first answer
+    if (
+      currentQuestion === 0 &&
+      !questionsGenerated &&
+      answers[0] &&
+      answers[0].length > 0
+    ) {
+      // Add first Q&A to conversation history
+      const newHistory = [
+        ...conversationHistory,
+        {
+          question: dynamicQuestions[0].question,
+          answer: answers[0],
+        },
+      ];
+      setConversationHistory(newHistory);
+
+      // Detect interests from the first answer
       const interests = detectInterests([answers[0]]);
-      const newQuestions = generateDynamicQuestions(interests);
+
+      // Generate AI-powered questions
+      const newQuestions = [dynamicQuestions[0]]; // Keep first question
+
+      // Generate remaining 6 questions using AI
+      for (let i = 2; i <= 7; i++) {
+        const aiQuestion = await generateNextQuestion(i, interests);
+        newQuestions.push(aiQuestion);
+      }
+
       setDynamicQuestions(newQuestions);
       setQuestionsGenerated(true);
 
@@ -180,6 +249,18 @@ const InterviewPanel = ({ onComplete }) => {
       // Move to the next question
       setCurrentQuestion(1);
     } else if (currentQuestion < dynamicQuestions.length - 1) {
+      // Add current Q&A to conversation history before moving to next
+      if (answers[currentQuestion] && answers[currentQuestion].length > 0) {
+        const newHistory = [
+          ...conversationHistory,
+          {
+            question: dynamicQuestions[currentQuestion].question,
+            answer: answers[currentQuestion],
+          },
+        ];
+        setConversationHistory(newHistory);
+      }
+
       setCurrentQuestion(currentQuestion + 1);
     }
   };
@@ -198,25 +279,76 @@ const InterviewPanel = ({ onComplete }) => {
     }
   };
 
-  const handleSubmitInterview = () => {
+  const handleSubmitInterview = async () => {
     // Stop speech recognition before submitting
     if (isListening && recognition) {
       recognition.stop();
     }
 
-    const interviewResults = evaluateInterviewAnswers(answers);
-    // Include the answers array in the results for detailed feedback
-    const resultsWithAnswers = {
-      ...interviewResults,
-      answers: [...answers],
-      totalQuestions: dynamicQuestions.length,
-    };
-    setResults(resultsWithAnswers);
-    setShowResults(true);
+    try {
+      // Call the AI-powered interview analysis API
+      const response = await fetch("/api/analyze-interview", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          answers: answers,
+          questions: dynamicQuestions.map((q) => ({
+            question: q.question,
+            type: q.type,
+          })),
+        }),
+      });
 
-    setTimeout(() => {
-      onComplete(resultsWithAnswers, answers, dynamicQuestions);
-    }, 3000);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const aiAnalysis = await response.json();
+
+      // Get basic evaluation for score/passed status
+      const interviewResults = evaluateInterviewAnswers(answers);
+
+      // Combine AI analysis with basic results
+      const resultsWithAnswers = {
+        ...interviewResults,
+        ...aiAnalysis,
+        answers: [...answers],
+        totalQuestions: dynamicQuestions.length,
+      };
+
+      setResults(resultsWithAnswers);
+      setShowResults(true);
+
+      setTimeout(() => {
+        onComplete(resultsWithAnswers, answers, dynamicQuestions);
+      }, 3000);
+    } catch (error) {
+      console.error("Error getting AI analysis:", error);
+
+      // Fallback to mock analysis if API fails
+      const interviewResults = evaluateInterviewAnswers(answers);
+      const mockAnalysis = generateInterviewAnalysis(
+        interviewResults,
+        answers,
+        dynamicQuestions
+      );
+
+      const resultsWithAnswers = {
+        ...interviewResults,
+        ...mockAnalysis,
+        answers: [...answers],
+        totalQuestions: dynamicQuestions.length,
+      };
+
+      setResults(resultsWithAnswers);
+      setShowResults(true);
+
+      setTimeout(() => {
+        onComplete(resultsWithAnswers, answers, dynamicQuestions);
+      }, 3000);
+    }
   };
 
   const toggleSpeechRecognition = () => {
@@ -241,6 +373,26 @@ const InterviewPanel = ({ onComplete }) => {
         );
       }
     }
+  };
+
+  const handleRestartInterview = () => {
+    // Reset all interview state
+    setCurrentQuestion(0);
+    setAnswers([""]);
+    setIsListening(false);
+    setShowResults(false);
+    setResults(null);
+    setInterviewStarted(false);
+    setRecognition(null);
+    setDynamicQuestions([firstInterviewQuestion]);
+    setQuestionsGenerated(false);
+    setInterimText("");
+    setConversationHistory([]);
+    setIsGeneratingQuestion(false);
+    speechAccumulatedRef.current = "";
+
+    // Reset timer
+    resetTimer();
   };
 
   const renderWelcome = () => (
@@ -346,7 +498,9 @@ const InterviewPanel = ({ onComplete }) => {
                         : "bg-slate-300 text-slate-600"
                     }`}
                   >
-                    {answers[index] && answers[index].length > 20 ? "✓" : index + 1}
+                    {answers[index] && answers[index].length > 20
+                      ? "✓"
+                      : index + 1}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-800 line-clamp-2">
@@ -379,11 +533,16 @@ const InterviewPanel = ({ onComplete }) => {
             <div className="text-sm text-slate-600 mb-2">Progress</div>
             <div className="flex items-center gap-2">
               <Progress
-                value={(answers.filter(a => a && a.length > 20).length / dynamicQuestions.length) * 100}
+                value={
+                  (answers.filter((a) => a && a.length > 20).length /
+                    dynamicQuestions.length) *
+                  100
+                }
                 className="flex-1"
               />
               <span className="text-xs text-slate-500">
-                {answers.filter(a => a && a.length > 20).length}/{dynamicQuestions.length}
+                {answers.filter((a) => a && a.length > 20).length}/
+                {dynamicQuestions.length}
               </span>
             </div>
           </div>
@@ -397,6 +556,9 @@ const InterviewPanel = ({ onComplete }) => {
               <CardTitle className="text-lg flex items-center justify-between">
                 <span className="flex items-center gap-2">
                   Question {currentQuestion + 1}
+                  {isGeneratingQuestion && (
+                    <Loader2 className="w-4 h-4 animate-spin text-purple-600" />
+                  )}
                   <span
                     className={`text-sm px-2 py-1 rounded ${
                       question.type === "personal"
@@ -408,9 +570,23 @@ const InterviewPanel = ({ onComplete }) => {
                   </span>
                 </span>
                 <div className="flex items-center gap-2">
-                  <div className={`inline-flex items-center gap-2 px-3 py-2 bg-slate-900 text-white rounded-lg border border-slate-700 ${timeLeft <= 60 ? 'bg-red-900 border-red-700' : ''}`}>
-                    <div className={`w-2 h-2 rounded-full ${timeLeft <= 60 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
-                    <span className={`font-mono text-lg font-bold ${timeLeft <= 60 ? 'text-red-400' : 'text-white'}`}>
+                  <div
+                    className={`inline-flex items-center gap-2 px-3 py-2 bg-slate-900 text-white rounded-lg border border-slate-700 ${
+                      timeLeft <= 60 ? "bg-red-900 border-red-700" : ""
+                    }`}
+                  >
+                    <div
+                      className={`w-2 h-2 rounded-full ${
+                        timeLeft <= 60
+                          ? "bg-red-500 animate-pulse"
+                          : "bg-green-500"
+                      }`}
+                    ></div>
+                    <span
+                      className={`font-mono text-lg font-bold ${
+                        timeLeft <= 60 ? "text-red-400" : "text-white"
+                      }`}
+                    >
                       {formattedTime}
                     </span>
                   </div>
@@ -422,9 +598,20 @@ const InterviewPanel = ({ onComplete }) => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-slate-800 text-lg leading-relaxed">
-                {question.question}
-              </p>
+              {isGeneratingQuestion ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="text-center">
+                    <Loader2 className="w-8 h-8 animate-spin text-purple-600 mx-auto mb-4" />
+                    <p className="text-slate-600">
+                      Generating personalized question...
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-slate-800 text-lg leading-relaxed">
+                  {question.question}
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -470,7 +657,9 @@ const InterviewPanel = ({ onComplete }) => {
                 {isListening && (
                   <div className="flex items-center gap-2 bg-red-50 px-3 py-1 rounded-full border border-red-200">
                     <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-                    <span className="text-red-600 font-medium">Recording...</span>
+                    <span className="text-red-600 font-medium">
+                      Recording...
+                    </span>
                     <div className="flex gap-1">
                       <div className="w-1 h-3 bg-red-400 rounded animate-pulse"></div>
                       <div
@@ -502,8 +691,8 @@ const InterviewPanel = ({ onComplete }) => {
                           recording
                         </div>
                         <div>
-                          • <strong>Speak clearly</strong> at normal pace for best
-                          results
+                          • <strong>Speak clearly</strong> at normal pace for
+                          best results
                         </div>
                         <div>
                           • <strong>Automatic punctuation</strong> and
@@ -562,8 +751,12 @@ const InterviewPanel = ({ onComplete }) => {
             <Button
               onClick={handleNextQuestion}
               disabled={
-                (currentQuestion === 0 && !questionsGenerated && answers[0].length < 20) ||
-                (questionsGenerated && (currentQuestion === dynamicQuestions.length - 1 || answers[currentQuestion].length < 20))
+                (currentQuestion === 0 &&
+                  !questionsGenerated &&
+                  answers[0].length < 20) ||
+                (questionsGenerated &&
+                  (currentQuestion === dynamicQuestions.length - 1 ||
+                    answers[currentQuestion].length < 20))
               }
             >
               Next
@@ -620,6 +813,14 @@ const InterviewPanel = ({ onComplete }) => {
               <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
                 <p className="text-green-800 font-semibold">
                   You earned Key C! 🔑
+                </p>
+              </div>
+            )}
+
+            {!results.passed && (
+              <div className="border-t pt-4">
+                <p className="text-center text-slate-600 text-sm">
+                  Generating comprehensive report...
                 </p>
               </div>
             )}

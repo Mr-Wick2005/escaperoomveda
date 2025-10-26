@@ -8,53 +8,63 @@ import GameUI from "./ui/GameUI";
 import Report from "./ui/Report";
 import AIAnalysis from "./ui/AIAnalysis";
 import ComprehensiveAnalysis from "./ui/ComprehensiveAnalysis";
-import { gameProgress, generateAptitudeAnalysis, generateCodingAnalysis, generateInterviewAnalysis, generateComprehensiveAnalysis } from "../mock/gameData";
+import {
+  gameProgress,
+  generateAptitudeAnalysis,
+  generateCodingAnalysis,
+  generateInterviewAnalysis,
+  generateComprehensiveAnalysis,
+} from "../mock/gameData";
 
 const Game = () => {
   // Load saved game state from localStorage
   const loadGameState = () => {
-    try {
-      const savedState = localStorage.getItem('escapeRoomGameState');
-      if (savedState) {
-        return JSON.parse(savedState);
-      }
-    } catch (error) {
-      console.error('Error loading game state:', error);
-    }
+    // Always return null to force starting from classroom on refresh
     return null;
   };
 
   const savedState = loadGameState();
 
   const [currentRoom, setCurrentRoom] = useState(savedState?.currentRoom || 1);
-  const [keysCollected, setKeysCollected] = useState(savedState?.keysCollected || {
-    keyA: false,
-    keyB: false,
-    keyC: false,
-  });
-  const [roomsCompleted, setRoomsCompleted] = useState(savedState?.roomsCompleted || {
-    classroom: false,
-    codingLab: false,
-    interviewRoom: false,
-  });
+  const [keysCollected, setKeysCollected] = useState(
+    savedState?.keysCollected || {
+      keyA: false,
+      keyB: false,
+      keyC: false,
+    }
+  );
+  const [roomsCompleted, setRoomsCompleted] = useState(
+    savedState?.roomsCompleted || {
+      classroom: false,
+      codingLab: false,
+      interviewRoom: false,
+    }
+  );
   const [showUI, setShowUI] = useState(null);
-  const [gameCompleted, setGameCompleted] = useState(savedState?.gameCompleted || false);
+  const [gameCompleted, setGameCompleted] = useState(
+    savedState?.gameCompleted || false
+  );
   const [isTransitioning, setIsTransitioning] = useState(false);
-  const [scores, setScores] = useState(savedState?.scores || {
-    aptitude: null,
-    coding: null,
-    interview: null,
-  });
+  const [scores, setScores] = useState(
+    savedState?.scores || {
+      aptitude: null,
+      coding: null,
+      interview: null,
+    }
+  );
   const [showReport, setShowReport] = useState(false);
   const [showAIAnalysis, setShowAIAnalysis] = useState(null);
   const [analysisData, setAnalysisData] = useState(null);
-  const [showComprehensiveAnalysis, setShowComprehensiveAnalysis] = useState(false);
-  const [comprehensiveAnalysisData, setComprehensiveAnalysisData] = useState(null);
+  const [showComprehensiveAnalysis, setShowComprehensiveAnalysis] =
+    useState(false);
+  const [comprehensiveAnalysisData, setComprehensiveAnalysisData] =
+    useState(null);
   const [testData, setTestData] = useState({
     aptitude: null,
     coding: null,
     interview: null,
   });
+  const [testFailed, setTestFailed] = useState(false);
 
   // Save game state to localStorage whenever it changes
   useEffect(() => {
@@ -66,9 +76,9 @@ const Game = () => {
       scores,
     };
     try {
-      localStorage.setItem('escapeRoomGameState', JSON.stringify(gameState));
+      localStorage.setItem("escapeRoomGameState", JSON.stringify(gameState));
     } catch (error) {
-      console.error('Error saving game state:', error);
+      console.error("Error saving game state:", error);
     }
   }, [currentRoom, keysCollected, roomsCompleted, gameCompleted, scores]);
 
@@ -240,13 +250,21 @@ const Game = () => {
 
           // Check if player failed (didn't pass the test)
           const failed = !result.passed;
-          const completedTests = Object.values(scores).filter(score => score !== null).length + 1; // +1 for current test
+          if (failed) {
+            setTestFailed(true);
+            return;
+          }
+          const completedTests =
+            Object.values(scores).filter((score) => score !== null).length + 1; // +1 for current test
           const allCompleted = completedTests === 3;
 
-          if (failed || allCompleted) {
+          if (allCompleted) {
             // Generate comprehensive analysis after a delay
             setTimeout(() => {
-              const comprehensiveAnalysis = generateComprehensiveAnalysis(scores, testData);
+              const comprehensiveAnalysis = generateComprehensiveAnalysis(
+                scores,
+                testData
+              );
               setComprehensiveAnalysisData(comprehensiveAnalysis);
               setShowComprehensiveAnalysis(true);
             }, 1000);
@@ -419,7 +437,7 @@ const Game = () => {
               </button>
               <button
                 onClick={() => {
-                  localStorage.removeItem('escapeRoomGameState');
+                  localStorage.removeItem("escapeRoomGameState");
                   window.location.reload();
                 }}
                 className="bg-white text-orange-600 px-6 py-3 rounded-xl font-bold hover:bg-orange-50 transition-all transform hover:scale-105 shadow-lg"
@@ -452,11 +470,67 @@ const Game = () => {
             setComprehensiveAnalysisData(null);
             // Reset game state if player failed
             if (comprehensiveAnalysisData.completedTests < 3) {
-              localStorage.removeItem('escapeRoomGameState');
+              localStorage.removeItem("escapeRoomGameState");
               window.location.reload();
             }
           }}
         />
+      )}
+
+      {/* Test Failed Modal */}
+      {testFailed && (
+        <div className="absolute inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-gradient-to-br from-red-400 via-red-500 to-red-600 p-8 rounded-3xl text-center max-w-lg mx-4 shadow-2xl border-4 border-red-300 animate-pulse">
+            <div className="text-8xl mb-6">❌</div>
+            <h2 className="text-4xl font-bold text-white mb-4 drop-shadow-lg">
+              TEST FAILED!
+            </h2>
+            <p className="text-white/95 mb-6 text-lg font-medium">
+              You didn't pass the test. Better luck next time!
+              <br />
+              Returning to the classroom to try again.
+            </p>
+
+            <button
+              onClick={() => {
+                // Reset all game state
+                localStorage.removeItem("escapeRoomGameState");
+                setCurrentRoom(1);
+                setKeysCollected({
+                  keyA: false,
+                  keyB: false,
+                  keyC: false,
+                });
+                setRoomsCompleted({
+                  classroom: false,
+                  codingLab: false,
+                  interviewRoom: false,
+                });
+                setScores({
+                  aptitude: null,
+                  coding: null,
+                  interview: null,
+                });
+                setTestFailed(false);
+                setShowUI(null);
+                setGameCompleted(false);
+                setShowReport(false);
+                setShowAIAnalysis(null);
+                setAnalysisData(null);
+                setShowComprehensiveAnalysis(false);
+                setComprehensiveAnalysisData(null);
+                setTestData({
+                  aptitude: null,
+                  coding: null,
+                  interview: null,
+                });
+              }}
+              className="bg-white text-red-600 px-6 py-3 rounded-xl font-bold hover:bg-red-50 transition-all transform hover:scale-105 shadow-lg"
+            >
+              🔄 Try Again
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
